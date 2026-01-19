@@ -4,118 +4,89 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
-# =====================================================
 # 1. 페이지 설정
-# =====================================================
 st.set_page_config(page_title="주식 분석 대시보드", layout="wide")
 
-# =====================================================
-# 2. 데이터 로드 함수 (캐싱 적용)
-# =====================================================
-@st.cache_data
-def load_stock_data(ticker, period):
-    # Ticker 객체 자체는 캐싱하지 않고 데이터만 추출하여 반환합니다.
-    stock_obj = yf.Ticker(ticker)
-    df = stock_obj.history(period=period)
-    info = stock_obj.info
-    return df, info
+# 세션 상태 초기화
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = ["AAPL", "TSLA", "005930.KS"]
+if "current_ticker" not in st.session_state:
+    st.session_state.current_ticker = "AAPL"
 
-# =====================================================
-# 3. 사이드바 (설정 영역)
-# =====================================================
+# 2. 데이터 로드 함수 (캐싱 강화: 1시간 동안 유지)
+@st.cache_data(ttl=3600)
+def get_all_stock_data(ticker, period):
+    try:
+        stock_obj = yf.Ticker(ticker)
+        df = stock_obj.history(period=period)
+        if df.empty:
+            return None
+        # 필요한 모든 정보를 하나의 딕셔너리로 묶어서 반환 (요청 횟수 감소)
+        data = {
+            "df": df,
+            "info": stock_obj.info,
+            "income": stock_obj.income_stmt,
+            "balance": stock_obj.balance_sheet,
+            "cash": stock_obj.cashflow
+        }
+        return data
+    except:
+        return None
+
+# 3. 사이드바 (조회 버튼 추가로 서버 부하 감소)
 with st.sidebar:
-    st.header("🔍 종목 설정")
-    ticker_input = st.text_input("티커 입력 (예: AAPL, TSLA, 005930.KS)", value="AAPL").upper()
-    period_input = st.selectbox("분석 기간", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=2)
+    st.header("⭐ 즐겨찾기")
+    for stock_id in st.session_state.watchlist:
+        if st.button(f"📌 {stock_id}", key=f"btn_{stock_id}", use_container_width=True):
+            st.session_state.current_ticker = stock_id
+            st.rerun()
+            
     st.divider()
-    st.markdown("""
-    **💡 Tip**
-    - 미국 주식: AAPL, NVDA
-    - 한국 코스피: 005930.KS
-    - 한국 코스닥: 066910.KQ
-    """)
+    
+    # ⚠️ 중요: Form을 사용하여 입력할 때마다 서버에 요청이 가는 것을 방지
+    with st.form("search_form"):
+        st.header("🔍 종목 검색")
+        ticker_input = st.text_input("티커 입력", value=st.session_state.current_ticker).upper()
+        period_input = st.selectbox("기간", ["1mo", "3mo", "6mo", "1y", "2y"], index=3)
+        submit_button = st.form_submit_button("데이터 불러오기")
+        
+        if submit_button:
+            st.session_state.current_ticker = ticker_input
 
-# =====================================================
-# 4. 메인 대시보드 로직
-# =====================================================
+    if st.button("현재 종목 즐겨찾기 추가"):
+        if st.session_state.current_ticker not in st.session_state.watchlist:
+            st.session_state.watchlist.append(st.session_state.current_ticker)
+            st.rerun()
+
+# 4. 메인 로직
 try:
-    # 데이터 가져오기
-    df, info = load_stock_data(ticker_input, period_input)
-    # 캐싱되지 않는 Ticker 객체는 별도로 생성 (재무제표용)
-    stock = yf.Ticker(ticker_input)
+    # 캐싱된 함수 호출
+    data_pack = get_all_stock_data(st.session_state.current_ticker, period_input)
+    
+    if data_pack:
+        df = data_pack["df"]
+        info = data_pack["info"]
 
-    # 헤더 섹션
-    st.title(f"📊 {info.get('longName', ticker_input)} 분석 대시보드")
-    st.caption(f"데이터 기준일: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 분석 기간: {period_input}")
-    st.divider()
+        st.title(f"📊 {info.get('longName', st.session_state.current_ticker)}")
+        
+        # 상단 지표
+        m1, m2, m3 = st.columns(3)
+        curr = df['Close'].iloc[-1]
+        diff = curr - df['Close'].iloc[-2]
+        m1.metric("현재가", f"${curr:,.2f}", f"{diff:+.2f}")
+        m2.metric("52주 최고", f"${info.get('fiftyTwoWeekHigh', 0):,.2f}")
+        m3.info(f"섹터: {info.get('sector', 'N/A')}")
 
-    # -----------------------------------------------------
-    # 상단 지표 (Metric Cards)
-    # -----------------------------------------------------
-    m1, m2, m3, m4 = st.columns(4)
-    curr_price = df['Close'].iloc[-1]
-    prev_price = df['Close'].iloc[-2]
-    price_diff = curr_price - prev_price
-    pct_diff = (price_diff / prev_price) * 100
-
-    with m1:
-        st.metric("현재가", f"${curr_price:,.2f}", f"{price_diff:+.2f} ({pct_diff:+.2f}%)")
-    with m2:
-        st.metric("52주 최고가", f"${info.get('fiftyTwoWeekHigh', 0):,.2f}")
-    with m3:
-        # RSI 예시 (데이터가 있다면 계산 로직 추가 가능)
-        st.metric("RSI (14)", "10.48", "과매도 구간", delta_color="inverse")
-    with m4:
-        st.info("💡 종합 의견: 관망 (Hold)")
-
-    st.write("") # 간격
-
-    # -----------------------------------------------------
-    # 메인 차트 영역 (Plotly 캔들스틱)
-    # -----------------------------------------------------
-    col_chart, col_stat = st.columns([2, 1])
-
-    with col_chart:
+        # 차트
         with st.container(border=True):
-            st.subheader("📈 주가 추세 & 이동평균")
-            fig = go.Figure(data=[go.Candlestick(
-                x=df.index,
-                open=df['Open'], high=df['High'],
-                low=df['Low'], close=df['Close'],
-                name="Candlestick"
-            )])
-            fig.update_layout(
-                height=450, 
-                margin=dict(l=10, r=10, t=10, b=10),
-                template="plotly_white",
-                xaxis_rangeslider_visible=False
-            )
+            fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+            fig.update_layout(height=450, template="plotly_white", xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-    with col_stat:
-        with st.container(border=True):
-            st.subheader("📊 거래량 추이")
-            st.bar_chart(df['Volume'], height=200)
-            
-            st.subheader("📝 특이사항")
-            st.write(f"- 최근 종가: {curr_price:,.2f}")
-            st.write(f"- 기간 내 최고가: {df['High'].max():,.2f}")
-            st.write(f"- 기간 내 최저가: {df['Low'].min():,.2f}")
-
-    # -----------------------------------------------------
-    # 하단 재무 정보 (Tabs)
-    # -----------------------------------------------------
-    st.divider()
-    st.subheader("💰 재무 요약 (핵심 지표)")
-    tab1, tab2, tab3 = st.tabs(["손익계산서", "대차대조표", "현금흐름표"])
-
-    with tab1:
-        st.dataframe(stock.income_stmt, use_container_width=True)
-    with tab2:
-        st.dataframe(stock.balance_sheet, use_container_width=True)
-    with tab3:
-        st.dataframe(stock.cashflow, use_container_width=True)
-
-except Exception as e:
-    st.error(f"⚠️ 데이터를 불러오는 중 오류가 발생했습니다: {e}")
-    st.warning("티커명이 올바른지, 혹은 네트워크 연결 상태를 확인해 주세요.")
+        # 재무제표 탭
+        st.subheader("💰 재무제표")
+        tab1, tab2, tab3 = st.tabs(["손익계산서", "대차대조표", "현금흐름표"])
+        with tab1: st.dataframe(data_pack["income"], use_container_width=True)
+        with tab2: st.dataframe(data_pack["balance"], use_container_width=True)
+        with tab3: st.dataframe(data_pack["cash"], use_container_width=True)
+    else
