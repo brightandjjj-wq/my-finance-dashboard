@@ -89,4 +89,4 @@ try:
         with tab1: st.dataframe(data_pack["income"], use_container_width=True)
         with tab2: st.dataframe(data_pack["balance"], use_container_width=True)
         with tab3: st.dataframe(data_pack["cash"], use_container_width=True)
-    else
+    else: 
