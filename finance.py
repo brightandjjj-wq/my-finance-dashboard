@@ -89,7 +89,7 @@ try:
         with tab1: st.dataframe(data_pack["income"], use_container_width=True)
         with tab2: st.dataframe(data_pack["balance"], use_container_width=True)
         with tab3: st.dataframe(data_pack["cash"], use_container_width=True)
-   else:
+    else:
         st.error("데이터를 가져오지 못했습니다. 티커를 다시 확인하거나 잠시 후 시도하세요.")
 
 except Exception as e:
